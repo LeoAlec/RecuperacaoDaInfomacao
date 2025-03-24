@@ -1,0 +1,103 @@
+---
+title: "Api Twitter - Analise"
+author: "Leo Alec"
+format: html
+editor: visual
+---
+
+## 1. Introdução
+
+Analisaremos sentimentos com base na situação da politica atual, usando dados da API do 'X'. Utilizaremos o **BERTimbau**.
+
+## 2. Preparação e Configuração do Ambiente
+
+```{r, message=FALSE, warning=FALSE}
+# Carregar pacotes necessários
+if (!requireNamespace("pacman")) install.packages("pacman")
+pacman::p_load(tidyverse, rtweet, reticulate, knitr, ggplot2)
+
+# Configurar Python
+use_python("C:/Users/leozi/AppData/Local/Programs/Python/Python313/python.exe", required = TRUE)
+
+# Criar e ativar ambiente virtual
+if (!virtualenv_exists("tweets_sentimento")) {
+  virtualenv_create("tweets_sentimento", python = "C:/Users/leozi/AppData/Local/Programs/Python/Python313/python.exe")
+}
+use_virtualenv("tweets_sentimento", required = TRUE)
+
+# Instalar dependências Python compatíveis
+#py_install(c(
+#  "transformers==4.40.2",
+#  "torch==2.0.1",
+#  "numpy==1.26.4",
+#  "sentencepiece==0.1.99",
+#  "nltk"
+#), pip = TRUE)
+```
+
+# 3. Coletando os Dados
+
+```{r}
+arquivo_rds <- "tweets_salvos.rds"
+
+if (file.exists(arquivo_rds)) {
+  dados_textos <- readRDS(arquivo_rds)
+} else {
+  auth <- rtweet_app(bearer_token = "AAAAAAAAAAAAAAAAAAAAADea0AEAAAAAKWTOVoiuveQFfbU7tAEkl2US7H4%3DVQXOBrTqeCrSE8AG4TE371ETt1aCNOfnZk3B1IHELpZcBrfMO7")
+
+  tweets <- tryCatch({
+    rtweet::search_tweets(q = "#educacao", n = 50, lang = "pt", token = auth)
+  }, error = function(e) {
+    message("Erro: Verifique o token ou limites da API.")
+    stop(e)
+  })
+
+  dados_textos <- tweets %>%
+    select(text) %>%
+    distinct() %>%
+    mutate(text = str_replace_all(text, "[\r\n]", " ")) %>%
+    filter(nchar(text) > 40) %>%
+    slice_head(n = 50)
+
+  saveRDS(dados_textos, arquivo_rds)
+}
+
+head(dados_textos$text, 5)
+```
+
+# 4. Analise de Sentimentos
+
+```{r}
+py_run_string("
+from transformers import pipeline
+sentiment_pipeline = pipeline('sentiment-analysis', model='neuralmind/bert-base-portuguese-cased')
+")
+
+dados_textos$bert <- map(dados_textos$text, ~py$sentiment_pipeline(.x)[[1]])
+dados_textos$bert_label <- map_chr(dados_textos$bert, "label")
+dados_textos$bert_score <- map_dbl(dados_textos$bert, "score")
+
+head(dados_textos$bert_label, 5)
+```
+
+# 5. Resultados
+
+```{r}
+resultado <- dados_textos %>%
+  select(text, bert_label, bert_score) %>%
+  mutate(id = row_number())
+
+knitr::kable(head(comparacao, 10), caption = "BERTimbau")
+```
+
+```{r}
+ggplot(comparacao, aes(x = bert_score, fill = bert_label)) +
+  geom_histogram(binwidth = 0.05, alpha = 0.8, color = "black") +
+  theme_minimal() +
+  labs(
+    title = "Distribuição dos Scores do BERTimbau",
+    x = "Score BERTimbau",
+    y = "Frequência",
+    fill = "Classificação BERTimbau"
+  )
+```
